@@ -1,7 +1,11 @@
 Dewarping with a regular calibration point grid
 https://forum.diybookscanner.org/viewtopic.php?f=19&t=2589
 GNU GPL Version 3
-14 Aug 2013
+16 Aug 2013
+
+Version 1.2 of ppmunwarp
+
+    just another update with a minor bugfix
 
 The version 1.1 of ppmunwarp with PPI features
 

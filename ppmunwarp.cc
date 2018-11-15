@@ -116,7 +116,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <math.h>
 #include <new>
 
-#define VERSION "1.1"
+#define VERSION "1.2"
 
 // ----------------------------------------------------------------------------
 
@@ -1649,10 +1649,10 @@ void Parameter::operator()(int argc,char *argv[]) {
     else if (doNumber) {
       char *end;
       long  z = strtol(arg,&end,(doNumber == &pointColor ? 16 : 10));
-      if (z <= 0 || z >
-          (doNumber == &gridMargin      ? 4        :
-           doNumber == &gridScale       ? 10       :
-           doNumber == &pointColor      ? 0xffffff : 100)) Usage(1);
+      if (z < (doNumber != &gridMargin) ||
+          z > (doNumber == &gridMargin      ? 4        :
+               doNumber == &gridScale       ? 10       :
+               doNumber == &pointColor      ? 0xffffff : 100)) Usage(1);
       *doNumber = int(z);
       doNumber  = 0; }
     else if (doReal) {
