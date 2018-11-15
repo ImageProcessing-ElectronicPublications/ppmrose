@@ -1,5 +1,5 @@
 // ppmunwarp.cc
-// Copyright (C) 2012 Michael Rose
+// Copyright (C) 2013 Michael Rose
 
 /* ============================================================================
 This program is free software: you can redistribute it and/or modify
@@ -95,6 +95,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //   pages are attached one after one.
 // * Take new calibration pictures after every 10 to 20 book pages and
 //   organize Yourself well in the later postprocessing step.
+//
+// With the options '-gx 5.08' and '-gy 5.08' the number of calibration
+// points per inch can be specified in x-direction and y-direction.
+// The first options sets both values together for convenience, so
+// the order of this pair of options is relevant. The default values
+// are choosen for calibration points, which are seperated by 1/2 cm.
+// These values are only used to calculate the PPI numbers of the
+// unwarped pictures, which are displayed for information purpose.
+// It is also possible to grab these values by suitable wrapper scripts.
 
 // ============================================================================
 
@@ -107,7 +116,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <math.h>
 #include <new>
 
-#define VERSION "1.0"
+#define VERSION "1.1"
 
 // ----------------------------------------------------------------------------
 
@@ -169,6 +178,12 @@ struct Parameter {
   // Scale factor of deformation grid with respect to resolution
   // of the calibration grid:
   int gridScale;
+
+  // Grid points per inch in x-direction:
+  double gridPerInchX;
+
+  // Grid points per inch in y-direction:
+  double gridPerInchY;
 
   // The hue value of the calibration points (coded in RGB):
   int pointColor;
@@ -1280,7 +1295,8 @@ struct Deformation {
   void Read(const char *filename, FILE *fh=0);
   void Write(const char *filename, FILE *fh=0);
   void SetFlattenedPictureSize(Grid& grid);
-  void Calculate(Grid& grid, int gridMargin, int gridScale);
+  void Calculate(Grid& grid, int gridMargin, int gridScale,
+                 double gridPerInchX, double gridPerInchY);
   void Flatten(Picture& srcPic, Picture& dstPic);
 };
 
@@ -1388,7 +1404,8 @@ void Deformation::SetFlattenedPictureSize(Grid& grid) {
 // Calculate a complete deformation map grid of suitable resolution
 // with interpolated and extrapolated mesh points (by MLS):
 
-void Deformation::Calculate(Grid& grid, int gridMargin, int gridScale) {
+void Deformation::Calculate(Grid& grid, int gridMargin, int gridScale,
+                            double gridPerInchX, double gridPerInchY) {
   long      gnx,gny, ix,iy, j,k;
   double    sx,sy;
   deform_t *map;
@@ -1441,6 +1458,14 @@ void Deformation::Calculate(Grid& grid, int gridMargin, int gridScale) {
       *map++ = deform_t(round(double(0x10000000) * yy));
   } }
   SetFlattenedPictureSize(grid);
+  // Calculate PPI information:
+  sx  = double(grid.width  - 1) * width;
+  sy  = double(grid.height - 1) * height;
+  sx *= gridPerInchX * double(gridScale) / double(nx - 1);
+  sy *= gridPerInchY * double(gridScale) / double(ny - 1);
+  Print("PPI in xy-direction:  %ld x %ld\n",
+        long(round(sx)), long(round(sy)));
+  Print("PPI: %ld\n", long(round(sqrt(sx * sy))));
 }
 
 // ----------------------------------------------------------------------------
@@ -1522,7 +1547,8 @@ void Main() {
   }
   if (param.calibDeformName || param.sourcePicName) {
     if (hasData) {
-      deform.Calculate(grid,param.gridMargin,param.gridScale);
+      deform.Calculate(grid,param.gridMargin,param.gridScale,
+                       param.gridPerInchX, param.gridPerInchY);
       if (param.calibDeformName) {
         if (*param.calibDeformName) deform.Write(param.calibDeformName);
         else                        deform.Write("stdout",stdout);
@@ -1555,6 +1581,8 @@ Parameter::Parameter() {
   destPicName     = 0;
   gridMargin      = 1;
   gridScale       = 2;
+  gridPerInchX    = 5.08;
+  gridPerInchY    = 5.08;
   pointColor      = 0xff0000;
   pointRange      = 85;
   pointSaturation = 50;
@@ -1593,6 +1621,8 @@ void Parameter::Usage(int exitCode) {
     "  -o  (stdout)  Set ouput file name.\n"
     "  -gm (1)       Set additional margin around calibration points.\n"
     "  -gs (2)       Set scale factor for deformation grid.\n"
+    "  -gx (5.08)    Set grid points per inch in x- and y-direction.\n"
+    "  -gy (5.08)    Set grid points per inch in y-direction.\n"
     "  -pc (ff0000)  Point color for calibration point detection.\n"
     "  -ph (85)      Range [%%] around point color for detection.\n"
     "  -ps (50)      Saturation [%%] for point detection.\n"
@@ -1611,6 +1641,7 @@ void Parameter::operator()(int argc,char *argv[]) {
   const char *inpName = 0;
   const char **doName = 0;
   int doOpt = 1, doCalib = 0, *doNumber = 0, argi;
+  double *doReal = 0;
   for (argi = 1; argi<argc; argi++) {
     char *arg = argv[argi];
     if (!*arg) Usage(1);
@@ -1623,7 +1654,14 @@ void Parameter::operator()(int argc,char *argv[]) {
            doNumber == &gridScale       ? 10       :
            doNumber == &pointColor      ? 0xffffff : 100)) Usage(1);
       *doNumber = int(z);
-      doNumber  = 0;
+      doNumber  = 0; }
+    else if (doReal) {
+      char *end;
+      double z = strtod(arg,&end);
+      if (z < 0.01 || z > 100.0) Usage(1);
+      if (doReal == &gridPerInchX)  gridPerInchY = z;
+      *doReal = z;
+      doReal  = 0;
     }
     else if (doOpt && *arg == '-') {
       if      (!strcmp(arg,"--version")) Usage(-1);
@@ -1639,6 +1677,8 @@ void Parameter::operator()(int argc,char *argv[]) {
       else if (!strcmp(arg,"-o"))        doName   = &destPicName;
       else if (!strcmp(arg,"-gm"))       doNumber = &gridMargin;
       else if (!strcmp(arg,"-gs"))       doNumber = &gridScale;
+      else if (!strcmp(arg,"-gx"))       doReal   = &gridPerInchX;
+      else if (!strcmp(arg,"-gy"))       doReal   = &gridPerInchY;
       else if (!strcmp(arg,"-pc"))       doNumber = &pointColor;
       else if (!strcmp(arg,"-ph"))       doNumber = &pointRange;
       else if (!strcmp(arg,"-ps"))       doNumber = &pointSaturation;
@@ -1648,7 +1688,7 @@ void Parameter::operator()(int argc,char *argv[]) {
       if (argi+1 != argc || !*arg) Usage(1);
       inpName = arg;
   } }
-  if (doName || doNumber) Usage(1);
+  if (doName || doNumber || doReal) Usage(1);
   // Check options and set missing file names for calibration/unwarp mode:
   argi = 0;
   if (calibPicName)    argi++;
