@@ -1,0 +1,8 @@
+Dewarping with a regular calibration point grid
+https://forum.diybookscanner.org/viewtopic.php?f=19&t=2589
+GNU GPL Version 3
+28 May 2012
+
+Version 1.0 of ppmunwarp
+
+    ppmunwarp, which does the actual calibration
