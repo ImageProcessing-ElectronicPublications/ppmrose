@@ -1,7 +1,12 @@
 Dewarping with a regular calibration point grid
 https://forum.diybookscanner.org/viewtopic.php?f=19&t=2589
 GNU GPL Version 3
-31 Aug 2013
+04 Sep 2013
+
+Version 1.5 of the programs ppmunwarp and ppmwhitebalance
+
+    ppmwhitebalance was enhanced to accept a rectangle
+    by using the new options -gx, -gy, -gw and -gh.
 
 Version 1.4 together with the library
 

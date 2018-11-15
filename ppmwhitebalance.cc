@@ -59,6 +59,12 @@
 // If one of the last two options is zero, that value is choosen
 // approximately considering the aspect ratio of the image.
 //
+// All pixels outside the rectangle given by the parameters
+// -gx, -gy, -gw, -gh are set to the RGB mean value of this rectangle.
+// If -go specifies a percentage parameter less then 100, then all
+// colors which differ by more than this percentage with respect to
+// the total color variation are also set to the mean value.
+//
 // If 'page01.ppm' is one of the images of the camera to be color
 // adjusted, this can be achieved by:
 //
@@ -109,11 +115,13 @@ struct ParameterWhiteBalance : Parameter
   int doCalib;
 
   // File names:
-  const char *calibPicName;    // Input image with gray card.
-  const char *calibTextName;   // Calibration grid in text format.
-  const char *calibColorName;  // Final color grid.
-  const char *sourcePicName;   // Skewed input image.
-  const char *destPicName;     // Unwarped output image.
+  const char *calibPicName;          // Input image with gray card.
+  const char *calibCheckAreaName;    // Control image for area detection.
+  const char *calibCheckExtendName;  // Control image for extension.
+  const char *calibTextName;         // Calibration grid in text format.
+  const char *calibColorName;        // Final color grid.
+  const char *sourcePicName;         // Skewed input image.
+  const char *destPicName;           // Unwarped output image.
 
   // Should adjustment only act on brightness:
   int colorBrightness;
@@ -123,6 +131,12 @@ struct ParameterWhiteBalance : Parameter
 
   // Desired gray RGB value of gray card (16 <= grayCard <= 240):
   int grayCard;
+
+  // Upper left corner and width/height of gray card area:
+  int gridX, gridY, gridW, gridH;
+
+  // Percentage of allowed color variation in rectangle:
+  int gridOffset;
 
   // Maximal multiplicator for RGB values:
   double colorFactor;
@@ -161,6 +175,10 @@ void ParameterWhiteBalance::Define()
           "Enforce calibration mode");
   AddString("-cc", calibPicName, 0, "(inpname)",
             "Set input PPM picture with gray card calibration image");
+  AddString("-ma", calibCheckAreaName, 0, "<name>",
+            "Set output PPM picture with red marked detected gray area");
+  AddString("-me", calibCheckExtendName, 0, "<name>",
+            "Set output PPM picture with checked gray extension");
   AddString("-cp", calibTextName, 0, "<name>",
             "Set file name for textual color grid");
   AddString("-d", calibColorName, 0, "(stdout)",
@@ -176,9 +194,19 @@ void ParameterWhiteBalance::Define()
   AddInt("-gc", grayCard, 10, 128, 0, 240, 0,
          "Set the desired RGB gray card value.\n"
          "A zero value indicates picture mean gray value");
-  AddDouble("-gm", colorFactor, 1.5, 1.0, 16.0, 0,
+  AddInt("-gx", gridX, 10, 0, 0, 24999, 0,
+         "X-coordinate of gray card area");
+  AddInt("-gy", gridY, 10, 0, 0, 24999, 0,
+         "Y-coordinate of gray card area");
+  AddInt("-gw", gridW, 10, 0, -24999, 25000, 0,
+         "Width of gray card area (0 means maximum width)");
+  AddInt("-gh", gridH, 10, 0, -24999, 25000, 0,
+         "Height of gray card area (0 means maximum width)");
+  AddInt("-go", gridOffset, 10, 100, 0, 100, 0,
+         "Percentage of color step which separates areas");
+  AddDouble("-gm", colorFactor, 255.0, 1.0, 255.0, 0,
             "Set maximal multiplicator for RGB values");
-  AddDouble("-gd", colorDivisor, 1.5, 1.0, 16.0, 0,
+  AddDouble("-gd", colorDivisor, 255.0, 1.0, 255.0, 0,
             "Set maximal divisor       for RGB values");
   AddInt("-nx", gridNX, 10, 0, 1, 1000, 0,
          "Number of grid points in x-direction (1 if nx=ny=0)");
@@ -203,12 +231,14 @@ void ParameterWhiteBalance::Check()
   if (calibPicName)    ++n;
   if (calibTextName)   ++n;
   if (calibColorName)  ++n;
-  if (n != 1)  doCalib = 1;
+  if (n != 1 || calibCheckAreaName || calibCheckExtendName)  doCalib = 1;
   if (doCalib) {
     if (sourcePicName || destPicName)  Usage(1);
     if (calibPicName) { if (inpName)  Usage(1); }
     else if (inpName) { calibPicName = inpName; }
-    if (!calibPicName && !calibTextName) calibPicName = "";
+    if (!calibPicName &&
+        (calibCheckAreaName || calibCheckExtendName || !calibTextName))
+      calibPicName = "";
     if (!calibColorName && (!calibPicName || !calibTextName))
       calibColorName = ""; }
   else {
@@ -222,16 +252,125 @@ void ParameterWhiteBalance::Check()
 
 // Type for image data:
 
-struct Picture : Image {
+struct Picture : Image
+{
+  long gridX, gridY, gridW, gridH;
   void Write(const char *filename, FILE *fh=0) {
     Image::Write(filename, fh, param.prgName); }
-
-  int  GetMeanValue();
+  void SetRectangle(long x=0, long y=0, long w=0, long h=0);
+  void ExtendArea(int offset);
+  void SaveCheckArea(const char *filename, long nx, long ny);
+  void SaveCheckExtend(const char *filename);
+  int  GetMeanValue255();
 };
 
 // ----------------------------------------------------------------------------
 
-int Picture::GetMeanValue() {
+void Picture::SetRectangle(long x, long y, long w, long h)
+{
+  if (x >= width)      x = width  - 1;
+  if (y >= height)     y = height - 1;
+  if (x <  0)          x = 0;
+  if (y <  0)          y = 0;
+  if (w <= 0)          w = width  - x + w;
+  if (h <= 0)          h = height - y + h;
+  if (w <= 0)          w = 1;
+  if (h <= 0)          h = 1;
+  if (x + w > width)   w = width  - x;
+  if (y + h > height)  h = height - y;
+  gridX = x;
+  gridY = y;
+  gridW = w;
+  gridH = h;
+}
+
+// ----------------------------------------------------------------------------
+
+void Picture::ExtendArea(int offset)
+{
+  long     nn     = gridW * gridH, span = 3 * width, x, y;
+  pixel_t *base   = pixel + (3 * (width * gridY + gridX)), *raw;
+  int      mincol = 65535, maxcol = 0, meancol[3], channel, delta, value, cmp;
+  double   accu[3];
+  for (channel=0; channel< 3; ++channel)  accu[channel] = 0.0;
+  for (y=0; y < gridH; ++y,base+=span) {
+    for (x=0,raw=base; x < gridW; ++x) {
+      for (channel=0; channel < 3; ++channel) {
+        value = int(*raw++);
+        if (mincol > value)  mincol = value;
+        if (maxcol < value)  maxcol = value;
+        accu[channel] += double(value); } } }
+  for (channel=0; channel < 3; ++channel) {
+    accu[channel] /= double(nn);
+    if (accu[channel] < double(mincol))  accu[channel] = double(mincol);
+    if (accu[channel] > double(maxcol))  accu[channel] = double(maxcol);
+    meancol[channel] = int(accu[channel]); }
+  delta = maxcol - mincol;
+  if (offset < 100) {
+    delta  = int((double(delta) * double(offset)) / 100.0);
+    offset = 1; }
+  else  offset = 0;
+  for (y=0,raw=pixel; y < height; ++y) {
+    for (x=0; x < width; ++x,raw+=3) {
+      value = (gridX <= x && x < gridX + gridW &&
+               gridY <= y && y < gridY + gridH);
+      if (value && offset) {
+        for (channel=0; channel < 3; ++channel) {
+          cmp = int(raw[channel]) - meancol[channel];
+          if (cmp < -delta || delta < cmp) { value = 0;  break; } } }
+      if (!value)
+        for (channel=0; channel < 3; ++channel)
+          raw[channel] = pixel_t(meancol[channel]); } }
+}
+
+// ----------------------------------------------------------------------------
+
+// Writes a control picture to visualize the gray card area in red:
+
+void Picture::SaveCheckArea(const char *filename, long nx, long ny)
+{
+  pixel_t *src   = pixel, *dst, val;
+  double   scale = 192.0 / double(depth);
+  long     cx, cy, x, y;
+  int      channel;
+  Image    img;
+  img.Reset(width, height, 255);
+  dst = img.pixel;
+  for (y=cy=0; y < height; ++y) {
+    for (x=cx=0; x < width; ++x) {
+      for (channel=0; channel < 3; ++channel) {
+        val = pixel_t(scale * *src++);
+        if (cx <= 0 || cy <= 0 ||
+            (!channel && gridY <= y && y < gridY+gridH &&
+             gridX <= x && x < gridX+gridW))  val = 255;
+        *dst++ = val; }
+      if (cx <= 0)  cx += width - 1;
+      cx -= nx; }
+    if (cy <= 0)  cy += height - 1;
+    cy -= ny; }
+  img.Write(filename, 0, param.prgName);
+}
+
+// ----------------------------------------------------------------------------
+
+// Writes a control picture to visualize the gray card extension:
+
+void Picture::SaveCheckExtend(const char *filename)
+{
+  pixel_t *src   = pixel, *dst;
+  double   scale = 255.0 / double(depth);
+  long     n     = size;
+  Image    img;
+  img.Reset(width, height, 255);
+  dst = img.pixel;
+  while (n--)  *dst++ = pixel_t(scale * *src++);
+  img.Write(filename, 0, param.prgName);
+}
+
+// ----------------------------------------------------------------------------
+
+int Picture::GetMeanValue255()
+{
   pixel_t *ptr   = pixel;
   long     nn    = width * height, n = nn;
   double   value = 0.0;
@@ -447,7 +586,7 @@ void Grid::TextRead(const char *filename, FILE *fh) {
     if (fscanf(fh, "Target %d\n", &target) != 1 || target < 16 || target > 240)
       throw 0;
     if (fscanf(fh, "Factor %x %x ", &z, &zz) != 2 ||
-        z < 4096 || z > 1048576 || zz < 4096 || zz > 1048576)  throw 0;
+        z < 257 || z > 16711680 || zz < 257 || zz > 16711680)  throw 0;
     smin = u_int32_t(z);
     smax = u_int32_t(zz);
     while (!feof(fh))  if (fgetc(fh) == '\n')  break;
@@ -513,9 +652,9 @@ void Grid::Read(const char *filename, FILE *fh) {
       fread(&target, sizeof(int), 1, fh) != 1 ||
       target < 16 || target > 240 ||
       fread(&smin, sizeof(u_int32_t), 1, fh) != 1 ||
-      smin < 4096 || smin > 1048576 ||
+      smin < 257 || smin > 16711680 ||
       fread(&smax, sizeof(u_int32_t), 1, fh) != 1 ||
-      smax < 4096 || smax > 1048576 ||
+      smax < 257 || smax > 16711680 ||
       smin > smax)  magic = 0;
   if (magic) {
     size = 3 * nx * ny;
@@ -564,8 +703,16 @@ void Grid::Calibrate(Picture& pic) {
   if (ny > pic.height)  ny = pic.height;
   Print("Calibration grid: %ld x %ld\n", nx, ny);
   Reset(nx, ny);
+  // Set gray card area due to rectangle restriction:
+  pic.SetRectangle(param.gridX, param.gridY, param.gridW, param.gridH);
+  if (param.calibCheckAreaName)
+    pic.SaveCheckArea(param.calibCheckAreaName, nx, ny);
+  // Set gray card area due to color variation:
+  pic.ExtendArea(param.gridOffset);
+  if (param.calibCheckExtendName)
+    pic.SaveCheckExtend(param.calibCheckExtendName);
   if (!param.grayCard) {
-    param.grayCard = pic.GetMeanValue();
+    param.grayCard = pic.GetMeanValue255();
     Print("Automatic graycard value: %d\n", param.grayCard); }
   // Save important parameters for later conversion:
   linear = param.gridLinear;
