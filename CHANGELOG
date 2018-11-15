@@ -1,7 +1,13 @@
 Dewarping with a regular calibration point grid
 https://forum.diybookscanner.org/viewtopic.php?f=19&t=2589
 GNU GPL Version 3
-27 Aug 2013
+31 Aug 2013
+
+Version 1.4 together with the library
+
+    splitted the identical parts of the programs ppmunwarp
+    and ppmwhitebalancing into a library
+    and eliminated a bug in ppmunwarp due to regression
 
 Version 1.3 of ppmunwarp
 

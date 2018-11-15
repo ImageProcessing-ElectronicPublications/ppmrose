@@ -1,20 +1,20 @@
 // ppmunwarp.cc
 // Copyright (C) 2013 Michael Rose
 
-/* ============================================================================
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <http://www.gnu.org/licenses/>.
-============================================================================ */
+// ============================================================================
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+// ============================================================================
 
 // This program can be used to unwarp pictures from digital cameras
 // with information obtained from a suitable calibration grid.
@@ -111,63 +111,18 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 // ============================================================================
 
-// Include files; no other libraries needed than 'libgpp':
+// Include files; no other libraries needed than 'libgpp' and 'ppmroselib.o':
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <ctype.h>
-#include <stdarg.h>
-#include <math.h>
-#include <new>
-
-#define VERSION "1.3"
-
-// ----------------------------------------------------------------------------
-
-// Example to compile successfully under Visual C++ 6.0 with
-// cl -GX ppmunwarp.cpp
-
-#ifdef _WIN32
-  typedef unsigned __int8   u_int8_t;
-  typedef unsigned __int16  u_int16_t;
-  typedef __int32           int32_t;
-  typedef unsigned __int32  u_int32_t;
-  inline double round(double z) { return floor(z+0.5); }
-  #include <io.h>
-  #include <fcntl.h>
-  #define binmode(fh) _setmode(_fileno(fh),_O_BINARY)
-#else
-  #define binmode(fh)
-#endif
-
-// ----------------------------------------------------------------------------
-
-// Global types:
-
-typedef u_int16_t pixel_t;   // Type for RGB components of a pixel.
-typedef int32_t   deform_t;  // Type for (x,y)-components of deformation grid.
-
-typedef unsigned long ulong;
-
-// ----------------------------------------------------------------------------
-
-// Global variables:
-
-const  int  nGlbBuf = 4096;
-static char glbBuf[nGlbBuf];  // Used for error messages.
+#include "ppmroselib.h"
 
 // ============================================================================
+// Global parameters/options.
+// ============================================================================
 
-// Global parameters/options:
-
-struct Parameter {
-
-  // Program name:
-  const char *prgName;
-
-  // Suppression of normal messages:
-  int quiet;
+struct ParameterUnwarp : Parameter
+{
+  // Calibration mode enforced:
+  int doCalib;
 
   // File names:
   const char *calibPicName;     // Input image with calibration points.
@@ -207,188 +162,89 @@ struct Parameter {
   // Output color depth per channel:
   int outputDepth;
 
-  Parameter();
-  void Usage(int exitCode);
-  void operator()(int argc, char *argv[]);
+  ParameterUnwarp() : Parameter("ppmunwarp") { }
+
+  void Define();
+  void Check();
 };
 
 // ----------------------------------------------------------------------------
 
-static Parameter param;  // Program parameters are global for ease of use.
+// Program parameters are global for ease of use:
+
+static ParameterUnwarp param;
+
+int main(int argc, char *argv[]) { return Handler(argc, argv, param); }
 
 // ----------------------------------------------------------------------------
 
-// Standard values for global parameters:
-
-Parameter::Parameter()
+void ParameterUnwarp::Define()
 {
-  prgName         = "ppmunwarp";
-  quiet           = 0;
-  calibPicName    = 0;
-  calibCheckName  = 0;
-  calibTextName   = 0;
-  calibDeformName = 0;
-  sourcePicName   = 0;
-  destPicName     = 0;
-  gridMargin      = 1;
-  gridScale       = 2;
-  gridPerInchX    = 5.08;
-  gridPerInchY    = 5.08;
-  pointColor      = 0xff0000;
-  pointRange      = 85;
-  pointSaturation = 50;
-  pointThreshold  = 50;
-  outputDepth     = 0;
-}
-
-// ----------------------------------------------------------------------------
-
-// Usage/help information:
-
-void Parameter::Usage(int exitCode)
-{
-  if (exitCode < 0) {
-    fprintf(stdout,
-            "%s " VERSION "\n\n"
-            "Copyright (C) 2013 Michael Rose\n"
-            "License GPLv3+: GNU GPL version 3 or later"
-            " <http://gnu.org/licenses/gpl.html>\n"
-            "This is free software: you are free to change"
-            " and redistribute it.\n"
-            "There is NO WARRANTY, to the extent permitted by law.\n\n",
-            param.prgName);
-    exit(0); }
-  fprintf(stderr,
-    "Usage: %s [options] [--] [inpname or stdin]\n\n"
-    "Options:\n"
-    "  --version     Print program version.\n"
-    "  -h            Print program usage.\n"
-    "  -q            Suppress normal program messages.\n"
-    "  -c            Enforce calibration mode.\n"
-    "  -cc (inpname) Set input PPM picture with calibration points.\n"
-    "  -m  <name>    Set output PPM picture with checked calibration points.\n"
-    "  -cp <name>    Set file name for textual calibration point list.\n"
-    "  -d  (stdout)  Set file name for binary deformation grid.\n"
-    "  -i  (inpname) Set input file name.\n"
-    "  -o  (stdout)  Set ouput file name.\n"
-    "  -gm (1)       Set additional margin around calibration points.\n"
-    "  -gs (2)       Set scale factor for deformation grid.\n"
-    "  -gx (5.08)    Set grid points per inch in x- and y-direction.\n"
-    "  -gy (5.08)    Set grid points per inch in y-direction.\n"
-    "  -pc (ff0000)  Point color for calibration point detection.\n"
-    "  -ph (85)      Infeasible hue range  [%%] (point detection).\n"
-    "  -ps (50)      Minimal    saturation [%%] (point detection).\n"
-    "  -pv (50)      Minimal    luminance  [%%] (point detection).\n"
-    "  -od (0)       Output color depth, zero means same as input depth.\n\n"
+  AddFlag("-c", doCalib, 0,
+          "Enforce calibration mode");
+  AddString("-cc", calibPicName, 0, "(inpname)",
+            "Set input PPM picture with calibration points");
+  AddString("-m", calibCheckName, 0, "<name>",
+            "Set output PPM picture with checked calibration points");
+  AddString("-cp", calibTextName, 0, "<name>",
+            "Set file name for textual calibration point list");
+  AddString("-d", calibDeformName, 0, "(stdout)",
+            "Set file name for binary deformation grid");
+  AddString("-i", sourcePicName, 0, "(inpname)",
+            "Set input file name");
+  AddString("-o", destPicName, 0, "(stdout)",
+            "Set ouput file name");
+  AddInt("-gm", gridMargin, 10, 1, 0, 4, 0,
+         "Set additional margin around calibration points");
+  AddInt("-gs", gridScale, 10, 2, 1, 10, 0,
+         "Set scale factor for deformation grid");
+  if (AddDouble("-gx", gridPerInchX, 5.08, 0.01, 100.0, 0,
+                "Set grid points per inch in x- and y-direction"))
+    gridPerInchY = gridPerInchX;
+  AddDouble("-gy", gridPerInchY, 5.08, 0.01, 100.0, 0,
+            "Set grid points per inch in y-direction");
+  AddInt("-pc", pointColor, 16, 0xff0000, 1, 0xffffff, 0,
+         "Point color for calibration point detection");
+  AddInt("-ph", pointRange, 10, 85, 1, 100, 0,
+         "Infeasible hue range  [%%] (point detection)");
+  AddInt("-ps", pointSaturation, 10, 50, 1, 100, 0,
+         "Minimal    saturation [%%] (point detection)");
+  AddInt("-pv", pointThreshold, 10, 50, 1, 100, 0,
+         "Minimal    luminance  [%%] (point detection)");
+  AddInt("-od", outputDepth, 10, 0, 0, 65535, 0,
+         "Output color depth, zero means same as input depth");
+  ExtraUsage(
     "Simple calibration:  ppmunwarp [-m check.ppm] calib.ppm > deform.bin\n"
-    "Simple unwarping:    ppmunwarp -d deform.bin skewed.ppm > unwarped.ppm\n"
-    ,prgName);
-  exit(exitCode);
+    "Simple unwarping:    ppmunwarp -d deform.bin skewed.ppm > unwarped.ppm");
 }
 
 // ----------------------------------------------------------------------------
 
-// Sets global parameters/options from the command line:
+// Special argument checking:
 
-void Parameter::operator()(int argc,char *argv[])
+void ParameterUnwarp::Check()
 {
-  const char  *inpName = 0;
-  const char **doName = 0;
-  int          doOpt = 1, doCalib = 0, *doNumber = 0, argi;
-  double      *doReal = 0;
-  char        *end;
-  for (argi = 1; argi < argc; ++argi) {
-    char *arg = argv[argi];
-    if (!*arg) Usage(1);
-    if (doName) { *doName = arg;  doName = 0; }
-    else if (doNumber) {
-      long  z = strtol(arg, &end, (doNumber == &pointColor ? 16 : 10));
-      if (z < (doNumber == &gridMargin      ? 0        :
-               doNumber == &outputDepth     ? 0        : 1)  ||
-          z > (doNumber == &gridMargin      ? 4        :
-               doNumber == &gridScale       ? 10       :
-               doNumber == &pointColor      ? 0xffffff :
-               doNumber == &outputDepth     ? 65535    : 100))  Usage(1);
-      *doNumber = int(z);
-      doNumber  = 0; }
-    else if (doReal) {
-      double z = strtod(arg, &end);
-      if (z < 0.01 || z > 100.0)  Usage(1);
-      if (doReal == &gridPerInchX)  gridPerInchY = z;
-      *doReal = z;
-      doReal  = 0; }
-    else if (doOpt && *arg == '-') {
-      if      (!strcmp(arg, "--version"))  Usage(-1);
-      else if (!strcmp(arg, "--"))         doOpt = 0;
-      else if (!strcmp(arg, "-h"))         Usage(0);
-      else if (!strcmp(arg, "-q"))         quiet    = 1;
-      else if (!strcmp(arg, "-c"))         doCalib  = 1;
-      else if (!strcmp(arg, "-cc"))        doName   = &calibPicName;
-      else if (!strcmp(arg, "-m"))         doName   = &calibCheckName;
-      else if (!strcmp(arg, "-cp"))        doName   = &calibTextName;
-      else if (!strcmp(arg, "-d"))         doName   = &calibDeformName;
-      else if (!strcmp(arg, "-i"))         doName   = &sourcePicName;
-      else if (!strcmp(arg, "-o"))         doName   = &destPicName;
-      else if (!strcmp(arg, "-gm"))        doNumber = &gridMargin;
-      else if (!strcmp(arg, "-gs"))        doNumber = &gridScale;
-      else if (!strcmp(arg, "-gx"))        doReal   = &gridPerInchX;
-      else if (!strcmp(arg, "-gy"))        doReal   = &gridPerInchY;
-      else if (!strcmp(arg, "-pc"))        doNumber = &pointColor;
-      else if (!strcmp(arg, "-ph"))        doNumber = &pointRange;
-      else if (!strcmp(arg, "-ps"))        doNumber = &pointSaturation;
-      else if (!strcmp(arg, "-pv"))        doNumber = &pointThreshold;
-      else if (!strcmp(arg, "-od"))        doNumber = &outputDepth;
-      else Usage(1); }
-    else {
-      if (argi+1 != argc || !*arg)  Usage(1);
-      inpName = arg; } }
-  if (doName || doNumber || doReal)  Usage(1);
-  // Check options and set missing file names for calibration/unwarp mode:
-  argi = 0;
-  if (calibPicName)     ++argi;
-  if (calibTextName)    ++argi;
-  if (calibDeformName)  ++argi;
-  if (argi != 1 || calibCheckName)  doCalib = 1;
+  int n = 0;
+  if (calibPicName)     ++n;
+  if (calibTextName)    ++n;
+  if (calibDeformName)  ++n;
+  if (n != 1 || calibCheckName)  doCalib = 1;
   if (doCalib) {
-    if (sourcePicName || destPicName) Usage(1);
-    if (calibPicName) { if (inpName) Usage(1);  }
+    if (sourcePicName || destPicName)  Usage(1);
+    if (calibPicName) { if (inpName)  Usage(1);  }
     else if (inpName) { calibPicName = inpName; }
     if (!calibPicName && (calibCheckName || !calibTextName)) calibPicName = "";
     if (!calibDeformName && (!calibPicName || !calibTextName))
       calibDeformName = ""; }
   else {
-    if (!sourcePicName) sourcePicName = inpName ? inpName : "";
-    else if (inpName)   Usage(1);
-    if (!destPicName)   destPicName = ""; }
+    if (!sourcePicName)  sourcePicName = inpName ? inpName : "";
+    else if (inpName)    Usage(1);
+    if (!destPicName)    destPicName = ""; }
 }
 
 // ============================================================================
 // General common functions:
-// ----------------------------------------------------------------------------
-
-// Error message with program termination:
-
-static void Error(const char *format, ...)
-{
-  va_list ap;
-  va_start(ap, format);
-  vsprintf(glbBuf, format, ap);  // Hopefully this fits (long filenames)!
-  va_end(ap);
-  throw glbBuf;
-}
-
-// Normal messages, which can be suppressed:
-
-static void Print(const char *format, ...)
-{
-  if (!param.quiet) {
-    va_list ap;
-    va_start(ap, format);
-    vfprintf(stderr, format, ap);
-    va_end(ap); }
-}
-
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 // Conversion of RGB-color components into HSV-components. This function
 // is coded adhoc without respecting any norms. Its only purpose is
@@ -413,90 +269,6 @@ static void convertRGBtoHSV(int r, int g, int b, int mcol,
   if (h >= 1.0) h = 0.0;
   v = cfac * double(b);
   s = double(r) / double(b);
-}
-
-// ============================================================================
-
-// Onedimensional cubic interpolation:
-//
-// 'f[4]' contains up to four interpolation coefficients, depending on
-// the fraction between the aequidistant grid points. 'm' is the maximum
-// possible grid index (between 0 and 'm'), 'o' the row/column offset
-// to adjust the grid pointer to adjacent rows/columns. 'r = 1' indicates
-// that the weighting process should start one step before the current
-// row/column and 'n' denotes the valid coefficients 'f[0 ... n]'.
-// The interpolation is correct if there are at least four grid
-// points (that means 'm >= 3').
-
-struct Cubic1
-{
-  double f[4];
-  long   m, o, n, r;
-  Cubic1(long m, long o) { this->m = m;  this->o = o; }
-  long operator()(double t1);
-};
-
-// ----------------------------------------------------------------------------
-
-// Initializes cubic interpolation at location '0.0 <= t1 <= m'.
-// The interpolation is C1-continuous.
-
-long Cubic1::operator()(double t1)
-{
-  double t0 = floor(t1);
-  long   i  = long(t0);
-  t1 -= t0;
-  if (i >= m) { --i;  t1 += 1.0; }  // Border case.
-  t0 = 1.0 - t1;
-  if (i) {
-    if (i == m - 1) {  // Highest grid interval:
-      f[    0] = -0.5 * t0 * t1;
-      f[r = 1] =       t0 * (2.0 - t0);
-      f[n = 2] = 0.5 * t1 * (2.0 - t0); }
-    else {  // General grid interval:
-      f[    0] = -0.5 * t0 * t0 * t1;
-      f[r = 1] = -t0 * (((1.5 * t1) - 1.0) * t1 - 1.0);
-      f[    2] = -t1 * (((1.5 * t0) - 1.0) * t0 - 1.0);
-      f[n = 3] = -0.5 * t1 * t1 * t0; } }
-  else {  // Lowest grid interval:
-    f[r = 0] = 0.5 * t0 * (2.0 - t1);
-    f[    1] =       t1 * (2.0 - t1);
-    f[n = 2] = -0.5 * t0 * t1; }
-  return i;
-}
-
-// ----------------------------------------------------------------------------
-
-// Twodimensional cubic interpolation:
-
-template<class ityp>
-struct Cubic2
-{
-  Cubic1 cx,cy;  // Onedimensional interpolation along x-axis and y-axis.
-  Cubic2(long mx, long ox, long my, long oy) : cx(mx, ox), cy(my, oy) { }
-  double operator()(ityp *raw);
-};
-
-// ----------------------------------------------------------------------------
-
-// Returns interpolated value for previously specified grid point
-// in the cell, whose lower left pointer is given by 'raw':
-//
-// The cubic interpolation on a rectangular grid has
-// the tensor product property.
-
-template<class ityp>
-double Cubic2<ityp>::operator()(ityp *raw)
-{
-  double  value = 0.0;
-  long    ix, iy;
-  ityp   *r;
-  if (cx.r) raw -= cx.o;
-  if (cy.r) raw -= cy.o;
-  for (ix=0; ix <= cx.n; ++ix,raw+=cx.o) {
-    for (iy=0,r=raw; iy <= cy.n; ++iy,r+=cy.o) {
-      value += double(*r) * (cx.f[ix] * cy.f[iy]); } }
-  return value;
 }
 
 // ============================================================================
@@ -1089,19 +861,10 @@ void Mesh::SortAndTranslate()
 
 // Type for image data:
 
-struct Picture {
-  long     width,   // Image width
-           height,  // Image height
-           depth,   // Maximum color value per channel.
-           size;    // 3 * width * height, each pixel has RGB-tripel.
-  pixel_t *pixel;   // 3 * width * height RGB values (16 bit).
+struct Picture : Image {
+  void Write(const char *filename, FILE *fh=0) {
+    Image::Write(filename, fh, param.prgName); }
 
-  Picture()  { pixel = 0;  Reset(); }
-  ~Picture() {             Reset(); }
-
-  void Reset(long width=0, long height=0, long depth=255);
-  void Read(const char *filename, FILE *fh=0);
-  void Write(const char *filename, FILE *fh=0);
   void FilterRedPoints();
   int  SwapRedGreenPoint(long x, long y, int canal=1);
   long CountRedPoints();
@@ -1112,140 +875,6 @@ struct Picture {
   void CreateMesh(Grid& grid);
   void Calibrate(Grid& grid);
 };
-
-// ----------------------------------------------------------------------------
-
-// Resizes the image array by given size parameters:
-
-void Picture::Reset(long width, long height, long depth)
-{
-  if (pixel)  delete pixel;
-  this->width  = width;
-  this->height = height;
-  this->depth  = depth;
-  size         = 3 * width * height;
-  pixel        = 0;
-  if (size)  pixel = new pixel_t[size];
-}
-
-// ----------------------------------------------------------------------------
-
-// Read raw PPM image file:
-
-void Picture::Read(const char *filename, FILE *fh)
-{
-  int      mode = 0, ch = 0;
-  long     z = 0, n, m;
-  u_int8_t buf[4096], *src;
-  pixel_t  val,       *dst;
-  if (fh != stdin)  fh = fopen(filename, "rb");
-  else              binmode(fh);  // Windows.
-  if (!fh)  Error("Couldn't read '%s' as raw PPM image file", filename);
-  try {
-    // Read preamble of PPM file:
-    while (mode != 5) {
-      // Do we need a next character?
-      if      (mode & 64)                mode &= 63;
-      else if ((ch = fgetc(fh)) == EOF)  throw 1;
-      // Do we need to read space with comments?
-      if (mode & 8) {
-        if (isspace(ch)) {
-          mode |= 16;  // We have seen at least one space/comment.
-          if (ch == '\n')  mode &= 31;
-          continue; }
-        else if (ch == '#') { mode |= 48;  continue; }
-        else {
-          if (mode & 32)  continue;   // Ignore comment characters in line.
-          if (!(mode & 16)) throw 1;  // Was there a separation?
-          // Switch to number reading:
-          mode &= 23; } }
-      // Do we need to read a number?
-      if (mode & 16) {
-        if (!(mode & 32))  z = 0;  // Initialize at beginning.
-        if (ch >= '0' && ch <= '9') {
-          mode |= 32;  // We have seen at least one digit.
-          z     = 10 * z + (ch - '0');
-          if (z > 65535)  throw 1;
-          continue; }
-        if (!(mode & 32))  throw 1;  // We need at least one digit.
-        // Switch to global parsing mode:
-        mode &= 7; }
-      // Main parsing of preamble:
-      switch (mode) {
-        case 0:   if (ch == 'P') { mode =  1;  continue; }  throw 1;
-        case 1:   if (ch == '6') { mode = 10;  continue; }  throw 1;
-        case 2:   width  = z;  mode = 75;  continue;
-        case 3:   height = z;  mode = 76;  continue;
-        default:  depth  = z;  mode =  5; } }
-    // Now the preamble has been consumed, check for final space character:
-    if (width > 25000 || height > 25000 || !depth || !isspace(ch))  throw 1;
-    Reset(width, height, depth);
-    // Read binary data; either 8bit or 16bit RGB channel values:
-    n   = size;
-    dst = pixel;
-    if (depth > 255) {
-      while (n) {
-        n -= m = n < 2048 ? n : 2048;
-        if (fread((src = buf), sizeof(u_int8_t) << 1, m, fh) != ulong(m))
-          throw 2;
-        while (m--) {
-          val    = pixel_t(*src++);
-          *dst++ = val = (val << 8) | pixel_t(*src++);
-          if (val > depth)  throw 4; } } }
-    else {
-      while (n) {
-        n -= m = n < 4096 ? n : 4096;
-        if (fread((src = buf), sizeof(u_int8_t), m, fh) != ulong(m))
-          throw 2;
-        while (m--) {
-          *dst++ = val = pixel_t(*src++);
-          if (val > depth)  throw 4; } } }
-    if (fgetc(fh) != EOF)  throw 3;
-    if (fh != stdin)  fclose(fh); }
-  catch (int nmr) {
-    const char *msg;
-    if (fh != stdin)  fclose(fh);
-    switch (nmr) {
-      case 1:   msg = "has wrong preamble";     break;
-      case 2:   msg = "is too small";           break;
-      case 3:   msg = "is too big";             break;
-      default:  msg = "has wrong color depth";  }
-    Error("PPM image file '%s' %s", filename, msg); }
-}
-
-// ----------------------------------------------------------------------------
-
-// Write raw PPM image file:
-
-void Picture::Write(const char *filename, FILE *fh)
-{
-  long     n, m, k;
-  u_int8_t buf[4096], *dst;
-  pixel_t  val,       *src;
-  if (fh != stdout)  fh = fopen(filename, "wb");
-  else               binmode(fh);  // Windows.
-  if (!fh) Error("Couldn't write '%s' as raw PPM image file", filename);
-  fprintf(fh, "P6\n# CREATOR: %s\n%ld %ld\n%ld\n",
-          param.prgName, width, height, depth);
-  n   = size;
-  src = pixel;
-  if (depth > 255) {
-    while (n) {
-      n   -= m = k = n < 2048 ? n : 2048;
-      dst  = buf;
-      while (k--) {
-        val    = *src++;
-        *dst++ = u_int8_t(val >> 8);
-        *dst++ = u_int8_t(val & 255); }
-      fwrite(buf, sizeof(u_int8_t) << 1, m, fh); } }
-  else {
-    while (n) {
-      n   -= m = k = n < 4096 ? n : 4096;
-      dst  = buf;
-      while (k--)  *dst++ = u_int8_t(*src++);
-      fwrite(buf, sizeof(u_int8_t), m, fh); } }
-  if (fh != stdout)  fclose(fh);
-}
 
 // ----------------------------------------------------------------------------
 
@@ -1708,30 +1337,30 @@ void Deformation::Flatten(Picture& srcPic, Picture& dstPic)
             dstDepth = param.outputDepth ? param.outputDepth : srcDepth;
   double    outDepth = double(dstDepth),
             facDepth = outDepth / double(srcDepth);
-  pixel_t  *srcRaw   = srcPic.pixel, *dstRaw, *rawX, *rawY;
-  deform_t *mapX, *mapY;
-  Cubic2<deform_t> defCub(defMX, 2, defMY, defOY);
-  Cubic2<pixel_t>  srcCub(srcMX, 3, srcMY, srcOY);
+  pixel_t  *srcRaw   = srcPic.pixel, *dstRaw;
+  Interpolation2<deform_t> defInter(0, defMX, 2, defMY, defOY);
+  Interpolation2<pixel_t>  srcInter(0, srcMX, 3, srcMY, srcOY);
   dstPic.Reset(dstMX+1, dstMY+1, dstDepth);
   // Empty all pixel values with color white as default value:
-  i             = dstPic.size;
-  dstRaw = rawX = dstPic.pixel;
-  while (i--)  *rawX++ = dstDepth;
+  i      = dstPic.size;
+  dstRaw = dstPic.pixel;
+  while (i--)  *dstRaw++ = dstDepth;
+  dstRaw = dstPic.pixel;
   for (dstY=0; dstY <= dstMY; ++dstY) {
-    mapY = xyMap + defOY * defCub.cy(dstSY * dstY);
-    for (dstX=0; dstX <= dstMX; ++dstX) {
-      mapX = mapY + 2 * defCub.cx(dstSX * dstX);
-      tf   = srcSX * defCub(mapX);
+    defInter.cy.Set(dstSY * dstY);
+    for (dstX=0; dstX <= dstMX; ++dstX,dstRaw+=3) {
+      defInter.cx.Set(dstSX * dstX);
+      tf = srcSX * defInter(xyMap);
       if (tf >= 0.0 && tf <= double(srcMX)) {
-        rawX = srcRaw + 3 * srcCub.cx(tf);
-        tf   = srcSY * defCub(mapX+1);
+        srcInter.cx.Set(tf);
+        tf = srcSY * defInter(xyMap+1);
         if (tf >= 0.0 && tf <= double(srcMY)) {
-          rawY = rawX + srcOY * srcCub.cy(tf);
+          srcInter.cy.Set(tf);
           for (i=0; i < 3; ++i) {
-            tf = round(facDepth * srcCub(rawY++));
+            tf = round(facDepth * srcInter(srcRaw + i));
             if      (tf < 0.0)       tf = 0.0;
             else if (tf > outDepth)  tf = outDepth;
-            *dstRaw++ = pixel_t(tf); } } } } }
+            dstRaw[i] = pixel_t(tf); } } } } }
 }
 
 // ============================================================================
@@ -1778,22 +1407,4 @@ void Main()
       deform.Flatten(src, dst);
       if (*param.destPicName)  dst.Write(param.destPicName);
       else                     dst.Write("stdout", stdout); } }
-}
-
-// ============================================================================
-
-// Main program to supply command line args, catch errors and
-// call the main routine:
-
-int main(int argc,char *argv[]) {
-  try {
-    try {
-      param(argc, argv);
-      Main(); }
-    // Catch exception from 'new' operator:
-    catch (std::bad_alloc& ba) { throw "Out of memory"; } }
-  catch (const char *msg) {
-    fprintf(stderr,"!!! Error in %s:\n!!! %s!\n", param.prgName, msg);
-    return 1; }
-  return 0;
 }
