@@ -1,16 +1,28 @@
 # Makefile
 # Copyright (C) 2013 Michael Rose
 
-all: ppmunwarp ppmwhitebalance
+PROJECT = ppmrose
+CXX = g++
+CXXFLAGS = -Wall -O3 -Isrc
+TLIB = lib$(PROJECT).a
+AR = ar
+RM = rm -f
+TARGET = ppmunwarp ppmwhitebalance
 
-ppmroselib.o:  ppmroselib.cc ppmroselib.h
-	g++ -Wall -O3 -c ppmroselib.cc
 
-ppmunwarp:  ppmunwarp.cc ppmroselib.o ppmroselib.h
-	g++ -Wall -O3 -o ppmunwarp ppmroselib.o ppmunwarp.cc
+all: $(TARGET)
 
-ppmwhitebalance:  ppmwhitebalance.cc ppmroselib.o ppmroselib.h
-	g++ -Wall -O3 -o ppmwhitebalance ppmroselib.o ppmwhitebalance.cc
+ppmunwarp: src/ppmunwarp.o $(TLIB)
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
+ppmwhitebalance: src/ppmwhitebalance.o $(TLIB)
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
+$(TLIB): src/ppmroselib.o
+	$(AR) crs $@ $^
+
+%.o : %.cc
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	rm -f ppmroselib.o ppmunwarp ppmwhitebalance
+	$(RM) $(TARGET) $(TLIB) src/*.o
